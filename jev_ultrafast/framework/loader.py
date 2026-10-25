@@ -279,8 +279,12 @@ def load_file(path, variables):
                     e9_config.load_account(role)["user_name"]
                 )
                 case_variables["wf_system_request_name"] = merged["_wf_system_request_name"]
-            except (KeyError, OSError):
+            except (KeyError, OSError, RuntimeError):
                 pass   # 角色没配 → 不注入，交给 missing 机制 skip
+                # RuntimeError：`e9_config.load_account()` 在【完全没有配置】时抛的是
+                # RuntimeError（KeyError/OSError 只覆盖"读文件出错"或"键不存在"）。
+                # 漏掉它曾让干净克隆在收集期直接中断（2026-10-25 实测），
+                # 而注释与下方 missing 机制本来就期望"取不到账号 → skip"。
 
         missing = set()
         merged["url"] = _substitute(merged["url"], case_variables, missing)

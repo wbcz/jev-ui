@@ -6,8 +6,8 @@
     "allure_cli": "2.13.8",
     "allure_pytest": "2.13.5",
     "allure_python_commons": "2.13.5",
-    "java": "1.8.0_201",
-    "ffmpeg": "8.1.1",
+    "java": "25.0.4.1",
+    "ffmpeg": "9.0.2",
     "pytest": "8.4.2",
     "python": "3.12.6",
     "browser_harness": "0.1.13"
@@ -19,7 +19,7 @@
     "marionette": "3.3.1"
   },
 
-  "_prefix_match": "这些用【前缀】比而不是全等：它们的版本串带构建后缀（如 ffmpeg 的 '8.1.1-full_build-www.gyan.dev'、java 的 '1.8.0_201-b09'）。",
+  "_prefix_match": "这些用【前缀】比而不是全等：它们的版本串带构建后缀（如 ffmpeg 的 '9.0.2-https://www.martin-riedl.de'、java 的 '25.0.4.1+1'）。",
   "prefix_match": ["ffmpeg", "java"],
 
   "_persistence": {

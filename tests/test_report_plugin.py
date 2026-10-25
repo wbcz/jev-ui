@@ -73,12 +73,12 @@ def test_mismatch_is_detected_exactly(ok_versions):
 def test_prefix_match_tolerates_build_suffix(ok_versions):
     """ffmpeg / java 的版本串带构建后缀，用前缀比。
 
-    实测：ffmpeg 报 `8.1.1-full_build-www.gyan.dev`、java 报 `1.8.0_201`。
+    实测：ffmpeg 报 `9.0.2-https://www.martin-riedl.de`、java 报 `25.0.4.1+1`。
     要求全等的话，换台机器就装不上了。
     """
     detected = dict(ok_versions)
-    detected["ffmpeg"] = "8.1.1-full_build-www.gyan.dev"
-    detected["java"] = "1.8.0_201-b09"
+    detected["ffmpeg"] = "9.0.2-full_build-www.gyan.dev"
+    detected["java"] = "25.0.4.1+1"
     assert install.check_versions(detected=detected) == []
 
     # 但前缀不对时仍要拦住

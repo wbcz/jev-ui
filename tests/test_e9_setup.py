@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from jev_ultrafast.framework import e9_setup, e9_workflow
+from jev_ultrafast.framework import e9_config, e9_setup, e9_workflow
 from jev_ultrafast.framework.loader import CaseError, load_cases
 
 CASES_YAML = """
@@ -47,6 +47,55 @@ cases:
 def _load(tmp_path, body=CASES_YAML):
     (tmp_path / "cases.yaml").write_text(textwrap.dedent(body), encoding="utf-8")
     return load_cases(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _offline_base_url(monkeypatch):
+    """给这些离线契约测试一个占位 base_url。
+
+    它们测的是 loader / 前置配方的**公式与分支**，不是真实 E9 环境。不注入时
+    `{{ base_url }}` 会进 missing，把用例自己声明的 `skip:` 理由盖掉——
+    干净克隆（没有 config.json）上实测有 2 条因此失败（2026-10-25）。
+    """
+    monkeypatch.setattr(e9_config, "base_url", lambda: "http://example.invalid")
+
+
+def test_load_cases_survives_missing_e9_config(tmp_path, monkeypatch):
+    """没配 E9 也必须能【收集】用例（干净克隆的离线校验前提）。
+
+    2026-10-25 实测：`e9_config.load_account()` 在完全没有配置时抛 `RuntimeError`，
+    而 loader 只捕获 `(KeyError, OSError)`，于是异常冲出**收集期**，
+    `uv run pytest` 以 "Interrupted: 1 error during collection" 失败——
+    AGENTS.md 记录的 "默认离线 143 passed, 6 skipped" 在干净克隆上并不成立。
+
+    期望行为写在 loader 注释里：取不到账号 → 不注入系统标题变量 → 交给
+    missing 机制 skip。这条用 `_skip` 与"没有 `_wf_system_request_name`"同时钉住。
+    """
+    def boom(role):  # noqa: ARG001
+        raise RuntimeError("缺少 E9 私有配置")
+
+    monkeypatch.setattr(e9_config, "load_account", boom)
+    monkeypatch.setattr(e9_config, "base_url", lambda: "")   # 覆盖 autouse 的占位值
+    monkeypatch.delenv("E9_LOGINID", raising=False)
+    monkeypatch.delenv("E9_USERPASSWORD", raising=False)
+    monkeypatch.delenv("E9_BASE_URL", raising=False)
+
+    cases = _load(tmp_path, """
+        version: 1
+        cases:
+          - id: t-noconfig
+            name: 没配置也能收集
+            url: "{{ base_url }}/x"
+            login: employee1
+            goal: 打开页面
+            expect:
+              - type: url_contains
+                value: /x
+        """)
+
+    assert [case["id"] for case in cases] == ["t-noconfig"]
+    assert "_wf_system_request_name" not in cases[0]
+    assert "_skip" in cases[0] and "base_url" in cases[0]["_skip"]
 
 
 def test_request_name_is_unique_per_case(tmp_path):
