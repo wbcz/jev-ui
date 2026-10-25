@@ -19,6 +19,7 @@
 12. [产研全流程怎么测](#12-产研全流程怎么测)
 13. [需求/功能说明如何标准化](#13-需求功能说明如何标准化)
 14. [环境与故障排查](#14-环境与故障排查)
+15. [agent.py 设计精华](#15-agentpy-设计精华)
 
 ---
 
@@ -293,6 +294,165 @@ Chrome 窗口被关（极具误导性）；`A browser step is already running`�
 git 相关：本仓库是**多 worktree**（主工作树 `/Users/wb/Documents/AI/jev-ui-test` 占用 `main`，本会话在
 `misty-planet` 的 detached HEAD）。在 detached 上提交后，用
 `git push origin HEAD:refs/heads/main` 推送（裸 `HEAD:main` 会被拒，要写全 ref）。
+
+---
+
+## 15. agent.py 设计精华
+
+> 这一节是对 `jev_ultrafast/agent.py`（279 行）的逐条拆解。**先纠三个最容易读错的地方，
+> 再说六条真正的精华**——因为这三处读错，精华就看不见了。
+
+### 15.1 三个容易读错的地方
+
+**① `history` 不是"成功才记"。**
+
+```python
+# agent.py:187-188
+# Record execution before observing. A stale post-action observation must not erase the action.
+state["history"].append({... "page_changed": None, ...})
+
+state["page"] = state["browser"].observe(...)            # :222
+changed = state["page"]["fingerprint"] != page["fingerprint"]
+state["history"][-1].update(page_changed=changed, ...)   # :225  事后回填
+```
+
+`history.append` **无条件执行，且发生在 observe 之前**。「点了但页面没变」照样进 history，
+同时**另外**进一份 `discards`（`:242`，`reason: "Executed, but nothing on the page changed."`）。
+
+**② `DONE` / `BLOCKED` 不是直接标记。**
+
+```python
+# agent.py:110-112
+if selected in {"DONE", "BLOCKED"}:
+    if not state["browser"].fresh(page):
+        state["status"] = "ready"
+        raise StalePage("Page changed since the decision. Choose again.")
+```
+
+「我看到完成了」这个判断，也必须基于一版**没过期**的页面——这是防 agent 提前收工的最后一道闸。
+
+**③ `tick` 不只是串联 `predict + act`。**
+
+```python
+# agent.py:98-107
+except StalePage:
+    state["decision"] = None
+    state["status"] = "ready"
+    state["page"] = state["browser"].observe(...)
+```
+
+它捕获 `StalePage`（含子类 `TargetUnavailable`）后**重新观察并继续**，是库内唯一的自愈路径；
+但 `NoTextValue` 不在捕获范围内，会抛给上层。
+
+另外：「录屏」这个词要收一收——`agent.py` 只做**按 `elapsed_ms` 命名落帧**（`:254-257`），
+编码成 mp4 是 `framework/encode.py` 的事；`screenshots` 控制的是 `observe()` 要不要截图。
+
+### 15.2 六条精华
+
+**精华 1 · 一条判据贯穿全篇：有没有可能已经改变世界**
+
+```python
+# agent.py:142
+# 两类都进这个分支，共同点是**没有任何东西被执行过**（这才是"可以重来"的判据）
+```
+
+| 情形 | 世界变了吗 | 处置 |
+|---|---|---|
+| `StalePage`：被新鲜度校验挡下 | 没有 | 作废，重观察 |
+| `NoTextValue`：文本生成就失败 | 没有（在 `browser.act` 之前） | 作废，重选 |
+| 点击本身 | **可能已经变了** | **绝不重试** |
+
+这条判据同时解释了为什么 `history` 与 `discards` 必须分开——它们不是「日志的两种格式」，
+是「世界变没变」的两种结论。
+
+**精华 2 · 先记账、再观察**
+
+顺序反过来（先 observe 再 append），act 之后的观察一旦抛错，这条**已经发生的动作就凭空消失**——
+报告里看不到、模型也看不到，于是下一轮它会再去点一次同一个按钮。
+
+> 收益不在顺利时，在**出错那一刻**：动作是真的，观察是可能失败的，两者不能互相抵押。
+
+**精华 3 · `history` 与 `discards` 是两个语义通道，绝不能混**
+
+```python
+# agent.py:152-155
+# 为什么用【独立列表】而不是塞进 history：history 同时被当"成功计数"用在两处——
+# 步数预算（len(history) >= max_steps）与"最近三条 page_changed 都是 False 就判 blocked"。
+# 把丢弃混进去，会让空转自动吃满步数预算，还会污染那个连续无变化的判定。
+```
+
+一句话：**`history` 是「我做过的」，`discards` 是「我试过但没发生／白费的」。**
+混进 `history` 会有两个后果：被拒的尝试**消耗步数预算**；连续三条作废会**误判 blocked**。
+
+分开之后，`discards` 才能以聚合形式喂回模型（`recent_discarded_attempts`），
+让模型知道「这条路我试过了」。**这条设计的由来是实测的 87 步空转**（`:150`）。
+
+**精华 4 · `discards` 不只是日志，它携带「处置判据」**
+
+| 字段 | 解决什么 |
+|---|---|
+| `target_level` | 只有「目标本身不可用」才够次数剔除；**「页面刚好动了」是瞬时的**，重选无妨 |
+| `node` + `document` | node id 换文档（导航）后**从 1 重发**，单靠 node 跨文档剔会**误杀新页面的无辜元素** |
+| `missing`（`NoTextValue`） | `True` 是「这个字段没值」→ 该剔；`False` 是协议故障 → **与字段无关，不能牵连** |
+| `reason` | 原样保留异常文本，报告里直接读到「为什么」 |
+
+```python
+# agent.py:180-181
+"target_level": isinstance(error, TargetUnavailable)
+                or bool(getattr(error, "missing", False)),
+```
+
+**「拒绝」和「重试」是两件相反的事，但都比「假装没发生」好。**
+
+**精华 5 · 记录路径永不抛异常**
+
+同一个文件里出现两次同样的克制：
+
+```python
+state.setdefault("discards", []).append(...)   # :243  不是 []
+"node": action.get("node"),                     # :211  不是 []
+```
+
+`:160` 与 `:206` 都写了理由：
+
+> 这里是【记录】路径，而且正处在异常里 / 已经在执行【之后】才跑。在这里抛 KeyError，
+> 会把「页面已变」这个真实信号换成一个与之无关的报错——**本仓库最防的那类错报**。
+
+这不是防御性编程的洁癖，是**故障归因的卫生**：出问题时你看到的必须是真问题。
+
+**精华 6 · 决策是一次性消耗品**
+
+```python
+# agent.py:108
+# Consume once, before any mutation or model call. A retry cannot double-click.
+state["decision"] = None
+```
+
+在**任何 mutation 或模型调用之前**消费掉。于是就算上层再调一次 `act`，也只会报
+`"Observe and choose before acting"`——**物理上没有决策可执行了**。
+配合 `:117` 的指纹比对，一次决策只能匹配一帧页面。
+
+**附赠 · 作废时故意不清 `pending_text`**
+
+```python
+# agent.py:157-158
+# pending_text 刻意【不清】：过期重试复用已生成文本靠的就是它，
+# 而清空会让下一次重试白花钱再问一遍文本模型。
+```
+
+这是「只有整份助手输入完全一致才复用」的落地：**作废不该把已经花掉的钱也一起作废**。
+
+### 15.3 删掉任一条会坏成什么样
+
+| 删掉 | 后果 |
+|---|---|
+| history 先记账再观察 | 观察抛错 → 动作凭空消失 → 下一轮重点一次（可能重复提交） |
+| history / discards 分开 | 空转自动吃满步数预算 + 误判 blocked |
+| `target_level` | 页面瞬时变动被当成「目标坏了」，把好目标剔掉 |
+| `node` + `document` | 导航后按 node 剔 → 误杀新页面的无辜元素 |
+| `setdefault` / `.get()` | 真实故障被 KeyError 顶替，排查方向全错 |
+| 先消费 decision | 同一决策被重复执行 = 双击 / 重复提交 |
+| `DONE` 前查 freshness | agent 在页面变了的瞬间宣布完成（假成功） |
 
 ---
 
