@@ -166,6 +166,7 @@ allure open examples/allure-report
 | [效率实测](docs/performance.md) | 决策耗时分布、与旧方案的口径对比、复现命令 |
 | [设计说明](docs/design.md) | 内核机制：动态「操作 + 目标」、快照与身份、新鲜度与遮挡校验、等待策略 |
 | [需求模板](docs/requirement-template.md) | 功能需求怎么写成“可测”的：十节模板、验收标准三态、字段映射、评审清单 |
+| [知识总结](docs/knowledge-base.md) | 执行流程、核心纪律、作废/遮挡/预算、模块关系、实测数据、产研全流程等问答速查 |
 | [AGENTS.md](AGENTS.md) | 工程约定：分层边界、断言口径、重跑策略、凭据与仓库边界 |
 | [`.claude/skills/`](.claude/skills/) | `/nl-case-author`、`/nl-case-run`、`/run-jev`、`/e9-graph-query` 四个 skill 的说明 |
 
